@@ -1,6 +1,6 @@
 # Neural Decision Trees
 
-The work has been done during the ML course by DS Msc. students:
+The work has been done during the ML course by DS MSc. students:
 
 - Temirlan Seilov
 - Alsu Sagirova
