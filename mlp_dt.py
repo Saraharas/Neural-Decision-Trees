@@ -5,12 +5,12 @@ from sklearn.neural_network import MLPClassifier, MLPRegressor
 
 class DecisionTreeClassifier():
     def __init__(self, 
-                 X=None, 
-                 y=None, 
-                 depth=1, 
-                 min_leaf=10, 
-                 threshold=0.5, 
-                 mlp_features_ratio=1.):
+        X=None, 
+        y=None, 
+        depth=1, 
+        min_leaf=10, 
+        threshold=0.5, 
+        mlp_features_ratio=1.):
         self.X = X
         self.y = y
         self.n = 0 if X is None else X.shape[0]
@@ -43,6 +43,14 @@ class DecisionTreeClassifier():
                             random.sample(range(X.shape[1]), k=max(2, int(np.ceil(self.mlp_features_ratio * X.shape[1]))))))
         if X.shape[0] == 0:
             return
+        
+        if len(y) != self.n:
+            raise ValueError("Number of labels=%d does not match "
+                             "number of samples=%d" % (len(y), n))
+        
+        if self.depth < 0:
+            raise ValueError("tree depth must be positive")
+        
         inner_model.fit(X[:, self.mlp_features_indices], y)
         if self.depth == 0 or self.min_leaf >= self.n:
             return
