@@ -47,11 +47,11 @@ class DecisionTreeClassifier():
         if len(y) != self.n:
             raise ValueError("Number of labels=%d does not match "
                              "number of samples=%d" % (len(y), n))
-        
         if self.depth < 0:
             raise ValueError("tree depth must be positive")
         
         inner_model.fit(X[:, self.mlp_features_indices], y)
+        
         if self.depth == 0 or self.min_leaf >= self.n:
             return
         if split_ratio is None:
