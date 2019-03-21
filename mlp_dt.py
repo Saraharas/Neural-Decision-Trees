@@ -1,97 +1,94 @@
+from mpi4py import MPI
 import numpy as np
-import random
 
-from sklearn.neural_network import MLPClassifier, MLPRegressor
+def init_same():
+    for i in range(N):
+        for j in range(M):
+            a[i][j] = b[i][j] = i * j * j + i + j + 1
 
-class DecisionTreeClassifier():
-    def __init__(self, 
-        X=None, 
-        y=None, 
-        depth=1, 
-        min_leaf=10, 
-        threshold=0.5, 
-        mlp_features_ratio=1.):
-        self.X = X
-        self.y = y
-        self.n = 0 if X is None else X.shape[0]
-        self.depth = depth
-        self.min_leaf = min_leaf
-        self.inner_model = None
-        self.lhs = None
-        self.rhs = None
-        self.threshold = threshold
-        self.mlp_features_ratio = mlp_features_ratio
-        
-    def set_data(self, X, y):
-        self.X = X
-        self.y = y
-        self.n = X.shape[0]
+N, M, master_id = 21, 21, 0
+max_value = 100
+
+a = np.random.randint(max_value, size=(N, M))
+b = np.random.randint(max_value, size=(N, M))
+
+if N != M:
+    raise ValueError("The dimensions do not corresponds to square matrices")
+
+c = np.zeros(shape=(N, M))
+
+comm = MPI.COMM_WORLD
+core_id = MPI.Get_processor_name()
+cores = comm.Get_size()
+rank = comm.Get_rank()
+
+print ("Process %d started.\n" % rank)
+print ("Running from processor {}, rank {} out of {} processors.\n".format(core_id, rank, cores))
+
+portion = N if cores < 2 else N // (cores - 1)
+
+if portion < 1:
+    raise ValueError("The number of splits is not positive")
+
+comm.Barrier()
+init_same()
+
+if rank == master_id: # master node
+    print ("Multiplication Starts")
+    for i in range(1, cores):
+        start_pos = (i-1) * portion
+        row = a[start_pos, :]
+        comm.send(start_pos, dest=i, tag=i)
+        comm.send(row, dest=i, tag=i)
+        for j in range(portion):
+            comm.send(a[j+start_pos,:], dest=i, tag=j+start_pos)
+
+comm.Barrier()
+
+if rank != master_id: # slave nodes
+    offset = comm.recv(source=master_id, tag=rank)
+    received_data = comm.recv(source=master_id, tag=rank)
+    for j in range(int(portion) - 1):
+        c = comm.recv(source=master_id, tag=j+offset + 1)
+        received_data = np.vstack((received_data, c))
     
-    def get_tree_depth():
-        return self.depth
-    
-    def get_tree_min_leaves():
-        return self.min_leaf
-    
-    def fit(self, X, y, inner_model=MLPClassifier(solver='lbfgs', hidden_layer_sizes=(50,)), 
-                        threshold=0.5, split_ratio=None):
-        self.inner_model = inner_model
-        if X is not None:
-            self.set_data(X, y)
-            self.threshold = threshold
-            self.mlp_features_indices = np.sort(np.array(
-                            random.sample(range(X.shape[1]), k=max(2, int(np.ceil(self.mlp_features_ratio * X.shape[1]))))))
-        if X.shape[0] == 0:
-            return
-        
-        if len(y) != self.n:
-            raise ValueError("Number of labels=%d does not match "
-                             "number of samples=%d" % (len(y), n))
-        if self.depth < 0:
-            raise ValueError("tree depth must be positive")
-        
-        inner_model.fit(X[:, self.mlp_features_indices], y)
-        
-        if self.depth == 0 or self.min_leaf >= self.n:
-            return
-        if split_ratio is None:
-            routing_probs = (inner_model.predict_proba(X[:, self.mlp_features_indices])[:, 0] >= threshold).astype(int)
-            X_left = X[np.where(routing_probs == 0)[0]]
-            X_right = X[np.where(routing_probs == 1)[0]]
-            y_left = y[np.where(routing_probs == 0)[0]]
-            y_right = y[np.where(routing_probs == 1)[0]]
+    t_start = MPI.Wtime()
+    for i in range(int(portion)):
+        res = np.zeros(shape=(M))
+        if (portion == 1):
+            r = received_data
         else:
-            routing_probs = inner_model.predict_proba(X[:, self.mlp_features_indices])[:, 0]
-            ord_indices = np.argsort(routing_probs)
-            left_indices = ord_indices[:-int(split_ratio * X.shape[0])]
-            right_indices = ord_indices[-int(split_ratio * X.shape[0]):]
-            X_left = X[left_indices]
-            X_right = X[right_indices]
-            y_left = y[left_indices]
-            y_right = y[right_indices]
-        
-        self.lhs = DecisionTreeClassifier(X=X_left, y=y_left, depth=self.depth - 1, min_leaf=self.min_leaf, mlp_features_ratio=self.mlp_features_ratio)
-        self.rhs = DecisionTreeClassifier(X=X_right, y=y_right, depth=self.depth - 1, min_leaf=self.min_leaf, mlp_features_ratio=self.mlp_features_ratio)
-        self.lhs.fit(X_left, y_left, inner_model, threshold, split_ratio)
-        self.rhs.fit(X_right, y_right, inner_model, threshold, split_ratio)
-    
-    def predict(self, X):
-        return np.array([self.predict_instance(X[i:i + 1, self.mlp_features_indices]) for i in range(len(X))])
-    
-    def predict_instance(self, X):
-        output = self.inner_model.predict(X)
-        if self.depth == 1 or (self.lhs is None and self.rhs is None):
-            return output
-        if output <= self.threshold:
-            return self.lhs.predict_instance(X)
+            r = received_data[i,:]
+        ptr = 0
+        for j in range(M):
+            col = b[:,j]
+            for x in range(M):
+                res[j] = res[j] + (r[x]*col[x])
+            ptr = ptr + 1
+        if i > 0:
+            send = np.vstack((send, res))
         else:
-            return self.rhs.predict_instance(X)
+            send = res
     
-    def print_tree(self, depth = 0):
-        if self is None:
-            return
-        print(self.X.shape[0], depth)
-        if self.rhs is not None:
-            self.lhs.print_tree(depth + 1)
-        if self.rhs is not None:
-            self.rhs.print_tree(depth + 1)
+    print("Elapsed time for the process %d is %.4fs.\n" %(rank, MPI.Wtime() - t_start))
+    comm.Send([send, MPI.FLOAT], dest=master_id, tag=rank)
+
+comm.Barrier()
+
+if rank == master_id:
+    res1 = np.zeros(shape=(portion, M))
+    comm.Recv([res1, MPI.FLOAT], source=1, tag=1)
+    kl = np.vstack((res1))
+    for i in range(2, cores):
+        col= np.zeros(shape=(portion, M))
+        comm.Recv([col, MPI.FLOAT], source=i, tag=i)
+        kl = np.vstack((kl, col.astype(int)))
+    print ("Process ended")
+    print ("Final result is:")
+    print(kl)
+    print("a @ b =", a @ b)
+    #print("a =", a)
+    #print("b =", b)
+    print(np.array_equal(a @ b, kl))
+
+comm.Barrier()
